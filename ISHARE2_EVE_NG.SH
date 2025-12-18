@@ -286,7 +286,7 @@ EOF
 set -euo pipefail
 
 # Versão do adapter
-echo "[*] ishare2-eve v1.2 (Search Fix + Retry)"
+echo "[*] ishare2-eve v1.3 (Output Parse Fix)"
 
 INSTALL_DIR="/opt/ishare2-eve"
 
@@ -304,8 +304,10 @@ usage() {
   echo "  ISHARE2_STORE=/caminho/base (força o store do ishare2)"
 }
 
-# Retry function to handle network flakiness
-run_with_retry() {
+# Retry function that pipes output to both console and a log file
+run_with_retry_captured() {
+  local logfile="$1"
+  shift
   local max_attempts=3
   local attempt=1
   local delay=5
@@ -317,8 +319,8 @@ run_with_retry() {
     fi
     
     set +e
-    "$@"
-    local status=$?
+    "$@" 2>&1 | tee -a "$logfile"
+    local status=${PIPESTATUS[0]} # Pega o status do primeiro comando do pipe
     set -e
     
     if [ $status -eq 0 ]; then
@@ -334,31 +336,21 @@ run_with_retry() {
   return 1
 }
 
-# Resolve numeric ID to name using ishare2 search
-resolve_real_name() {
-  local input="$1"
-  # Se for número, tenta buscar o nome real via 'ishare2 search'
-  if [[ "$input" =~ ^[0-9]+$ ]]; then
-    local found=""
-    # Remove cores ANSI (sed) e busca exata no awk
-    
-    # 1) Tenta searchAll
-    found="$(ishare2 searchAll "$input" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk -v id="$input" '$1 == id {print $2; exit}')"
-    
-    # 2) Fallback search normal
-    if [ -z "$found" ]; then
-        found="$(ishare2 search "$input" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk -v id="$input" '$1 == id {print $2; exit}')"
-    fi
-    
-    if [ -n "$found" ]; then
-      echo "$found"
-      return 0
-    else
-       echo "[DEBUG] ID $input não encontrado no search/searchAll do ishare2." >&2
-    fi
+# Extracts the image Name from the log file
+extract_name_from_log() {
+  local logfile="$1"
+  local input="$2"
+  
+  # Procura por "Name : <nome>" na saída (remove cores ANSI com sed)
+  local extracted
+  extracted="$(grep "Name" "$logfile" | head -n1 | sed 's/\x1b\[[0-9;]*m//g' | awk -F':' '{print $2}' | tr -d ' ')"
+  
+  if [ -n "$extracted" ]; then
+    echo "$extracted"
+  else
+    # Fallback: retorna o input original se falhar
+    echo "$input"
   fi
-  # Se não achou ou não é número, retorna o original
-  echo "$input"
 }
 
 if [ "${#}" -lt 3 ]; then
@@ -386,31 +378,38 @@ if ! command -v ishare2 >/dev/null 2>&1; then
   exit 1
 fi
 
-# Tenta resolver ID para Nome antes de prosseguir
-NAME="$(resolve_real_name "$NAME_INPUT")"
-if [ "$NAME" != "$NAME_INPUT" ]; then
-  echo "[i] ID '$NAME_INPUT' resolvido para nome: '$NAME'"
-fi
-
 STORE="$(detect_ishare2_store 2>/dev/null || true)"
 [ -n "$STORE" ] && echo "[i] ishare2 store detectado: $STORE" || true
 
+TMP_LOG="/tmp/ishare2_pull_$$.log"
+rm -f "$TMP_LOG"
+
 case "$ACTION" in
   pull)
-    run_with_retry ishare2 pull "$TYPE" "$NAME_INPUT"
+    run_with_retry_captured "$TMP_LOG" ishare2 pull "$TYPE" "$NAME_INPUT"
+    rm -f "$TMP_LOG"
     ;;
   install)
-    # Install is local, usually no retry needed, but safe to keep direct
-    install_eve_qemu "$NAME"
+    # Para install direto, assumimos que o user deu o nome correto, ou tentamos o resolve antigo (removido por simplicidade)
+    # Se o usuário der só install ID e não tivermos o log do pull, vai falhar se o ID != Pasta. 
+    # Mas o caso principal é pull-install.
+    install_eve_qemu "$NAME_INPUT"
     ;;
   pull-install)
-    # Pull usa o input original (pode ser ID), Install usa o nome resolvido
-    if run_with_retry ishare2 pull "$TYPE" "$NAME_INPUT"; then
-      install_eve_qemu "$NAME"
+    if run_with_retry_captured "$TMP_LOG" ishare2 pull "$TYPE" "$NAME_INPUT"; then
+      REAL_NAME="$(extract_name_from_log "$TMP_LOG" "$NAME_INPUT")"
+      
+      if [ "$REAL_NAME" != "$NAME_INPUT" ]; then
+        echo "[i] Nome detectado no log: '$REAL_NAME' (Input era: '$NAME_INPUT')"
+      fi
+      
+      install_eve_qemu "$REAL_NAME"
     else
       echo "[ERRO] Falha ao baixar a imagem. A instalação foi abortada." >&2
+      rm -f "$TMP_LOG"
       exit 1
     fi
+    rm -f "$TMP_LOG"
     ;;
   *)
     usage
