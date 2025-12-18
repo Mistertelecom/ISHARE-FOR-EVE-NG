@@ -285,6 +285,9 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Versão do adapter
+echo "[*] ishare2-eve v1.2 (Search Fix + Retry)"
+
 INSTALL_DIR="/opt/ishare2-eve"
 
 source "${INSTALL_DIR}/lib/detect_platform.sh"
@@ -336,18 +339,22 @@ resolve_real_name() {
   local input="$1"
   # Se for número, tenta buscar o nome real via 'ishare2 search'
   if [[ "$input" =~ ^[0-9]+$ ]]; then
-    local found
-    # Tenta pegar a segunda coluna quando a primeira for o ID exato
-    # Output esperado: ID NAME TYPE SIZE ...
-    found="$(ishare2 searchAll "$input" 2>/dev/null | awk -v id="$input" '$1 == id {print $2; exit}')"
-    # Fallback para 'search' normal se 'searchAll' falhar ou não existir
+    local found=""
+    # Remove cores ANSI (sed) e busca exata no awk
+    
+    # 1) Tenta searchAll
+    found="$(ishare2 searchAll "$input" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk -v id="$input" '$1 == id {print $2; exit}')"
+    
+    # 2) Fallback search normal
     if [ -z "$found" ]; then
-        found="$(ishare2 search "$input" 2>/dev/null | awk -v id="$input" '$1 == id {print $2; exit}')"
+        found="$(ishare2 search "$input" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk -v id="$input" '$1 == id {print $2; exit}')"
     fi
     
     if [ -n "$found" ]; then
       echo "$found"
       return 0
+    else
+       echo "[DEBUG] ID $input não encontrado no search/searchAll do ishare2." >&2
     fi
   fi
   # Se não achou ou não é número, retorna o original
