@@ -201,19 +201,30 @@ source "${_THIS_DIR}/validate_image.sh"
 source "${_THIS_DIR}/detect_ishare2_store.sh"
 
 run_fixpermissions() {
-  if [ -x /opt/unetlab/wrappers/unl_wrapper ]; then
-    bash /opt/unetlab/wrappers/unl_wrapper -a fixpermissions
-    return 0
+  local wrapper="/opt/unetlab/wrappers/unl_wrapper"
+  
+  if [ -x "$wrapper" ]; then
+    echo "[-] Executando fixpermissions via $wrapper..."
+    "$wrapper" -a fixpermissions && return 0
+    echo "[!] Falha na execução direta. Tentando PHP..."
   fi
+  
+  if [ -f "$wrapper" ]; then
+     echo "[-] Executando fixpermissions via php $wrapper..."
+     php "$wrapper" -a fixpermissions && return 0
+  fi
+
+  # Fallback location
   if [ -x /opt/unetlab/unl_wrapper ]; then
-    bash /opt/unetlab/unl_wrapper -a fixpermissions
-    return 0
+    /opt/unetlab/unl_wrapper -a fixpermissions && return 0
   fi
+
+  # Fallback old wrapper
   if [ -x /opt/unetlab/wrappers/fixpermissions ]; then
-    bash /opt/unetlab/wrappers/fixpermissions
-    return 0
+    /opt/unetlab/wrappers/fixpermissions && return 0
   fi
-  echo "[WARN] fixpermissions não encontrado automaticamente. Rode manualmente." >&2
+
+  echo "[WARN] fixpermissions não encontrado ou falhou. Execute manualmente no EVE." >&2
   return 1
 }
 
@@ -286,7 +297,7 @@ EOF
 set -euo pipefail
 
 # Versão do adapter
-echo "[*] ishare2-eve v1.3 (Output Parse Fix)"
+echo "[*] ishare2-eve v1.4 (Wrapper Fix)"
 
 INSTALL_DIR="/opt/ishare2-eve"
 
