@@ -331,6 +331,29 @@ run_with_retry() {
   return 1
 }
 
+# Resolve numeric ID to name using ishare2 search
+resolve_real_name() {
+  local input="$1"
+  # Se for número, tenta buscar o nome real via 'ishare2 search'
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    local found
+    # Tenta pegar a segunda coluna quando a primeira for o ID exato
+    # Output esperado: ID NAME TYPE SIZE ...
+    found="$(ishare2 searchAll "$input" 2>/dev/null | awk -v id="$input" '$1 == id {print $2; exit}')"
+    # Fallback para 'search' normal se 'searchAll' falhar ou não existir
+    if [ -z "$found" ]; then
+        found="$(ishare2 search "$input" 2>/dev/null | awk -v id="$input" '$1 == id {print $2; exit}')"
+    fi
+    
+    if [ -n "$found" ]; then
+      echo "$found"
+      return 0
+    fi
+  fi
+  # Se não achou ou não é número, retorna o original
+  echo "$input"
+}
+
 if [ "${#}" -lt 3 ]; then
   usage
   exit 1
@@ -338,7 +361,7 @@ fi
 
 ACTION="$1"
 TYPE="$2"
-NAME="$3"
+NAME_INPUT="$3"
 
 PLATFORM="$(detect_platform)"
 if [ "$PLATFORM" != "eve-ng" ]; then
@@ -356,19 +379,26 @@ if ! command -v ishare2 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Tenta resolver ID para Nome antes de prosseguir
+NAME="$(resolve_real_name "$NAME_INPUT")"
+if [ "$NAME" != "$NAME_INPUT" ]; then
+  echo "[i] ID '$NAME_INPUT' resolvido para nome: '$NAME'"
+fi
+
 STORE="$(detect_ishare2_store 2>/dev/null || true)"
 [ -n "$STORE" ] && echo "[i] ishare2 store detectado: $STORE" || true
 
 case "$ACTION" in
   pull)
-    run_with_retry ishare2 pull "$TYPE" "$NAME"
+    run_with_retry ishare2 pull "$TYPE" "$NAME_INPUT"
     ;;
   install)
     # Install is local, usually no retry needed, but safe to keep direct
     install_eve_qemu "$NAME"
     ;;
   pull-install)
-    if run_with_retry ishare2 pull "$TYPE" "$NAME"; then
+    # Pull usa o input original (pode ser ID), Install usa o nome resolvido
+    if run_with_retry ishare2 pull "$TYPE" "$NAME_INPUT"; then
       install_eve_qemu "$NAME"
     else
       echo "[ERRO] Falha ao baixar a imagem. A instalação foi abortada." >&2
