@@ -301,6 +301,36 @@ usage() {
   echo "  ISHARE2_STORE=/caminho/base (força o store do ishare2)"
 }
 
+# Retry function to handle network flakiness
+run_with_retry() {
+  local max_attempts=3
+  local attempt=1
+  local delay=5
+  
+  while [ $attempt -le $max_attempts ]; do
+    if [ $attempt -gt 1 ]; then
+      echo "[!] Falha anterior. Retentando ($attempt/$max_attempts) em $delay segundos..."
+      sleep $delay
+    fi
+    
+    set +e
+    "$@"
+    local status=$?
+    set -e
+    
+    if [ $status -eq 0 ]; then
+      return 0
+    else
+      echo "[!] Comando falhou com código de saída $status."
+    fi
+    
+    attempt=$((attempt + 1))
+  done
+  
+  echo "[ERRO] Todas as $max_attempts tentativas falharam."
+  return 1
+}
+
 if [ "${#}" -lt 3 ]; then
   usage
   exit 1
@@ -331,14 +361,19 @@ STORE="$(detect_ishare2_store 2>/dev/null || true)"
 
 case "$ACTION" in
   pull)
-    ishare2 pull "$TYPE" "$NAME"
+    run_with_retry ishare2 pull "$TYPE" "$NAME"
     ;;
   install)
+    # Install is local, usually no retry needed, but safe to keep direct
     install_eve_qemu "$NAME"
     ;;
   pull-install)
-    ishare2 pull "$TYPE" "$NAME"
-    install_eve_qemu "$NAME"
+    if run_with_retry ishare2 pull "$TYPE" "$NAME"; then
+      install_eve_qemu "$NAME"
+    else
+      echo "[ERRO] Falha ao baixar a imagem. A instalação foi abortada." >&2
+      exit 1
+    fi
     ;;
   *)
     usage
